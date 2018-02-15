@@ -1,0 +1,414 @@
+---
+title: "R01-weight"
+author: "Seda Bilaloglu"
+date: "December 26, 2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+library(lme4)
+library(plyr)
+library(MethComp) 
+library(boxcoxmix)
+library(ggplot2) 
+library(reshape2)
+
+```
+
+## Data Import and Visualizations
+
+```{r cars}
+#import the data 
+
+data <- read.csv("final_weight_summary_042417.csv")
+data0<-data 
+
+#read the clinical data
+c_data<-read.csv("clinical_data_073117.csv")
+
+```
+
+```{r}
+#incorporate the clinical data in the actual data
+data$vision<-NA
+data$prop<-NA
+data$sensory<-NA
+data$FMS<-NA
+
+for (ind in 1:length(data[,1])){
+  data$vision[ind]<-c_data[c_data$subject==data[ind,1],2]
+  data$prop[ind]<-c_data[c_data$subject==data[ind,1],3]
+  data$sensory[ind]<-c_data[c_data$subject==data[ind,1],4]
+  data$FMS[ind]<-c_data[c_data$subject==data[ind,1],5]
+}
+```
+
+```{r}
+#create seperatwe columns for K,V and T conditions 
+
+data$K<-0
+data$V<-0
+data$T<-0 
+data[data$condition=='NTVK',2]<-NA
+
+for (i in 1:length(data[,1])){
+  if(grepl('K', data$condition[i])){data$K[i]=1}
+  
+  if(grepl('V', data$condition[i])){data$V[i]=1}
+  
+  if(grepl('T', data$condition[i])){data$T[i]=1}
+}
+
+data[is.na(data$condition),2]<-'NTVK'
+```
+
+
+```{r}
+#analyse the data more closely 
+hist(data$plfr)
+```
+
+
+
+```{r}
+#some trials were excluded, however the data was included in the compiled data. These are 0 
+data=data[!data$plfr==0,]
+
+#remove NA
+data <- data[!is.na(data$plfr),]
+
+#exclude the negative plfr - we dont know why this is happening; must be a sensor problem, there are only 5 trials
+data<-data[!data$plfr<0,]
+
+#some histograms 
+data$pld<-data$fyonset-data$fzonset
+data$lpd<-data$switch-data$fyonset
+
+hist(data$pld)
+hist(data$lpd,200)
+
+``` 
+
+
+
+```{r}
+#look into PLFR and the missing values 
+
+plot(data$plfr)
+hist(data$plfr,100)
+
+plot(data$plfr1st)
+hist(data$plfr1st,100) 
+
+plot(data$plfr2nd)
+hist(data$plfr2nd,100) 
+
+plot(data$pgfr)
+hist(data$pgfr,100)
+
+```
+
+
+
+## start visualization
+
+```{r} 
+#visualize Baseline
+
+baseline<-data[data$A.U=='Baseline',]
+
+cond_list<-unique(data$condition)
+
+for(i in 1:8){
+  
+p<-ggplot(baseline[baseline$condition==cond_list[i],], aes(x = trial, y = plfr, color = factor(subject))) +
+  
+  geom_point(aes(group = factor(subject)), alpha = .8) +
+  geom_smooth(se=FALSE) +  
+  labs(
+    title = "plfr vs weights",
+    x = NULL,
+    y = "PLFR",
+    color = NULL
+  )+ 
+  #xlim(0, 100)+ 
+  #ylim(0, 200)+
+  #facet_wrap(~subject) +  
+  #annotate("text", label = round(corr,digits = 3), size = 4, x = 80, y = -0.08)
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  print(p)}
+
+```
+```{r}
+#exclude first trial and trials>7
+
+baseline=baseline[baseline$trial>1,]
+baseline=baseline[baseline$trial<8,]
+
+data=data[data$trial>1,]
+data=data[data$trial<8,]
+
+``` 
+
+```{r}
+
+#this section is from your previous analysis 
+#session names=
+#Baseline-> baseline affected arm
+#AInvolved->alteranting affected arm
+#ANonInvolved-> alternating unaffected arm
+
+#create baseline, affected, unaffacted matrixes, each will have 40 subjects and 8 conditions 
+session_list=names(table(data$A.U)) 
+subject_list=names(table(data$subject)) 
+condition_list=names(table(data$condition))
+
+data_avg<-matrix(0,960,5)
+data_avg<-as.data.frame(data_avg)
+
+i=1
+for (session in 1:3){ 
+  for (subject in 1:40){
+    for (condition in 1:8){
+      
+      data_avg[i,1]<-session_list[session]
+      data_avg[i,2]<-subject_list[subject]
+      data_avg[i,3]<-condition_list[condition]
+      light<- min(data[(data$subject==subject_list[subject])&(data$A.U==session_list[session])&(data$condition==condition_list[condition]),4])
+      heavy<- max(data[(data$subject==subject_list[subject])&(data$A.U==session_list[session])&(data$condition==condition_list[condition]),4])
+      data_avg[i,4]<-(light+heavy)/2
+      data_avg[i,5]<-median(log(data[(data$subject==subject_list[subject])&(data$A.U==session_list[session])&(data$condition==condition_list[condition])&(data$weight==heavy),6]))-median(log(data[(data$subject==subject_list[subject])&(data$A.U==session_list[session])&(data$condition==condition_list[condition])&(data$weight==light),6]))
+      i=i+1
+    
+    }}}
+
+colnames(data_avg) <- c("session","subject", "condition","weight","scaling")
+
+data_avg$delta <- data_avg$scaling/250
+data_avg$condition <- factor(data_avg$condition)
+data_avg$condition <- relevel(data_avg$condition, "TVK")
+res0<-lm(delta~factor(condition), data=data_avg[data_avg$session=="Baseline",])
+res1<-lm(delta~factor(condition), data=data_avg[data_avg$session=="AInvolved",])
+res2<-lm(delta~factor(condition), data=data_avg[data_avg$session=="ANonInvolved",])
+
+res0b <- lme(fixed=delta~factor(condition), random=~1|subject, data=data_avg[data_avg$session=="Baseline",], method="ML")
+res1b <- lme(fixed=delta~factor(condition), random=~1|subject, data=data_avg[data_avg$session=="AInvolved",],method="ML")
+res2b <- lme(fixed=delta~factor(condition), random=~1|subject, data=data_avg[data_avg$session=="ANonInvolved",],method="ML")
+
+1-pchisq(2*(logLik(res0b)-logLik(res0)),1)
+1-pchisq(2*(logLik(res1b)-logLik(res1)),1)
+1-pchisq(2*(logLik(res2b)-logLik(res2)),1)
+
+
+## lets compare across conditions
+data_avg$T<-data_avg$condition%in% c("T", "TV", "TK", "TVK")
+data_avg$V<-data_avg$condition%in% c("V", "TV", "VK", "TVK")
+data_avg$K<-data_avg$condition%in% c("K", "VK", "TK", "TVK")
+
+res00<-lm(delta~1, data=data_avg[data_avg$session=="Baseline",])
+res0<-lm(delta~factor(T)+factor(V)+factor(K), data=data_avg[data_avg$session=="Baseline",])
+res0a<-lm(delta~factor(T)*factor(V)+factor(K), data=data_avg[data_avg$session=="Baseline",])
+res0b<-lm(delta~factor(T)*factor(K)+factor(T), data=data_avg[data_avg$session=="Baseline",])
+res0c<-lm(delta~factor(V)*factor(K)+factor(T), data=data_avg[data_avg$session=="Baseline",])
+res0d<-lm(delta~factor(T)*factor(V)*factor(K), data=data_avg[data_avg$session=="Baseline",])
+
+res10<-lm(delta~1, data=data_avg[data_avg$session=="AInvolved",])
+res1<-lm(delta~factor(T)+factor(V)+factor(K), data=data_avg[data_avg$session=="AInvolved",])
+res1a<-lm(delta~factor(T)*factor(V)+factor(K), data=data_avg[data_avg$session=="AInvolved",])
+res1b<-lm(delta~factor(T)*factor(K)+factor(T), data=data_avg[data_avg$session=="AInvolved",])
+res1c<-lm(delta~factor(V)*factor(K)+factor(T), data=data_avg[data_avg$session=="AInvolved",])
+res1d<-lm(delta~factor(T)*factor(V)*factor(K), data=data_avg[data_avg$session=="AInvolved",])
+
+
+res20<-lm(delta~1, data=data_avg[data_avg$session=="ANonInvolved",])
+res2<-lm(delta~factor(T)+factor(V)+factor(K), data=data_avg[data_avg$session=="ANonInvolved",])
+res2a<-lm(delta~factor(T)*factor(V)+factor(K), data=data_avg[data_avg$session=="ANonInvolved",])
+res2b<-lm(delta~factor(T)*factor(K)+factor(T), data=data_avg[data_avg$session=="ANonInvolved",])
+res2c<-lm(delta~factor(V)*factor(K)+factor(T), data=data_avg[data_avg$session=="ANonInvolved",])
+res2d<-lm(delta~factor(T)*factor(V)*factor(K), data=data_avg[data_avg$session=="ANonInvolved",])
+
+
+## compare pre-post
+res3 <- lm(delta~(factor(T)+factor(K)+factor(V))*factor(session), data=data_avg[data_avg$session%in% c("Baseline", "ANonInvolved"),])
+
+
+plot(data_avg$delta[data_avg$condition=="TVK"], data_avg$delta[data_avg$condition=="NTVK"])
+abline(v=0.0014)
+ abline(h=0.0014)
+ points(data_avg$delta[data_avg$condition=="TVK" & data_avg$session=="ANonInvolved"], data_avg$delta[data_avg$condition=="NTVK" & data_avg$session=="ANonInvolved"], col="red")
+ points(data_avg$delta[data_avg$condition=="TVK" & data_avg$session=="AInvolved"], data_avg$delta[data_avg$condition=="NTVK" & data_avg$session=="AInvolved"], col="green")
+ 
+ cond<-names(table(data_avg$condition))
+ plot(abs(data_avg$delta[data_avg$session=="Baseline"]-0.0014), abs(data_avg$delta[data_avg$session=="ANonInvolved"]-0.0014))
+ for (k in 1:8) {
+   points(abs(data_avg$delta[data_avg$session=="Baseline" & data_avg$condition==cond[k]]-0.0014), abs(data_avg$delta[data_avg$session=="ANonInvolved"& data_avg$condition==cond[k]]-0.0014), col=k)
+ }
+ abline(v=0.0014)
+ abline(h=0.0014)
+ 
+ plot((data_avg$delta[data_avg$session=="Baseline"]-data_avg$delta[data_avg$session=="ANonInvolved"]), (data_avg$delta[data_avg$session=="AInvolved"]-data_avg$delta[data_avg$session=="ANonInvolved"]))
+ abline(0,1)
+ abline(h=0)
+ abline(v=0)
+cor((data_avg$delta[data_avg$session=="Baseline"]-data_avg$delta[data_avg$session=="ANonInvolved"]), (data_avg$delta[data_avg$session=="AInvolved"]-data_avg$delta[data_avg$session=="ANonInvolved"]))
+ 
+ 
+```
+
+
+
+```{r}
+
+ggplot(data_avg[data_avg=='Baseline',], aes(x = condition, y = scaling, color = factor(subject))) +
+  
+  geom_point(aes(group = factor(subject)), alpha = .8) +
+  geom_smooth(se=FALSE) +  
+  labs(
+    title = "plfr v",
+    x = NULL,
+    y = "PLFR",
+    color = NULL
+  )+ 
+  #xlim(0, 100)+ 
+  #ylim(0, 200)+
+  #facet_wrap(~subject) +  
+  #annotate("text", label = round(corr,digits = 3), size = 4, x = 80, y = -0.08)
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+
+```{r}
+#visualizing the clinical data
+clinicaldata<-melt(c_data, "subject")
+
+ggplot(clinicaldata, aes(x = subject, y = value, color = factor(subject))) +
+  
+  geom_point(aes(group = factor(subject)), alpha = .8) +
+  geom_smooth(se=FALSE) +  
+  #theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  facet_wrap( ~ variable, ncol=2)
+
+```
+
+
+
+```{r}
+#in this section Seda attempted to incorporate FMS, vision, proprioceptive and sensory informnation
+#we need inpit here!!
+
+
+res0<-lme(fixed=log(plfr)~weight, random=~1|subject, data=baseline, na.action="na.omit")  
+res0b<-lme(fixed=log(plfr)~weight, random=~1|subject/trial, data=baseline, na.action="na.omit")  
+AIC(res0, res0b)
+
+#AIC
+#6408.666		
+#6410.666	
+
+cond<-names(table(data$condition))
+scaleMat<-matrix(0,8,6)
+for (k in 1:8) {
+res00<-lme(fixed=log(plfr)~weight, random=~1|subject, data=data[(data$A.U=='Baseline' & data$condition==cond[k]),] , na.action="na.omit")  
+scaleMat[k,1]<-fixef(res00)[2]
+scaleMat[k,2]<-vcov(res00)[2,2]^0.5
+
+res01<-lme(fixed=log(plfr)~weight, random=~1|subject, data=data[(data$A.U=='AInvolved' & data$condition==cond[k]),] , na.action="na.omit")  
+scaleMat[k,3]<-fixef(res01)[2]
+scaleMat[k,4]<-vcov(res01)[2,2]^0.5
+
+res02<-lme(fixed=log(plfr)~weight, random=~1|subject, data=data[(data$A.U=='ANonInvolved' & data$condition==cond[k]),] , na.action="na.omit")  
+scaleMat[k,5]<-fixef(res02)[2]
+scaleMat[k,6]<-vcov(res02)[2,2]^0.5
+
+}
+scaleMat<-as.data.frame(scaleMat)
+names(scaleMat)<-c("base","base.se","Affected","affect.se","unaffected","unaffected.se")
+scaleMat$cond<-cond
+
+
+varMat<-matrix(0,8,2)
+for (k in 1:8) {
+res01<-lme(fixed=log(plfr)~weight, random=~1|subject, data=data[(data$A.U=='Baseline' & data$condition==cond[k]),] , na.action="na.omit")  
+varMat[k,2]<-summary(res01)$sigma
+varMat[k,1]<-var(ranef(res01))^0.5
+}
+varMat<-as.data.frame(varMat)
+varMat$cond<-cond
+varMat$totVar<-varMat[,1]^2+varMat[,2]^2
+names(varMat)<-c("ranef","sig","condition","totVar")
+
+#Fixed effects: log(plfr) ~ weight 
+#                Value  Std.Error  DF  t-value p-value
+#(Intercept) 2.8856191 0.07978854 437 36.16583       0
+#weight      0.0014043 0.00011638 437 12.06681       0
+
+#here we have 0.14% change in PLFR per gram on the unaffected side
+
+#The model reports a
+#0.14% change in PLFR per gram of weight increase: [exp
+#(0.14)  1] 	 100%
+
+
+#additive models 
+
+res1a<-lme(fixed=log(plfr)~(factor(K)+factor(V)+factor(T))*weight+FMS+vision+prop+sensory, random=~1|subject, data=baseline, na.action="na.omit", method="ML")  
+#res1b<-lme(fixed=log(plfr)~factor(V)*weight, random=~1|subject, data=baseline, na.action="na.omit")  
+#res1c<-lme(fixed=log(plfr)~factor(T)*weight, random=~1|subject, data=baseline, na.action="na.omit")  
+
+summary(res1a)
+
+
+#two way interaction
+res2a<-lme(fixed=log(plfr)~(factor(K)*factor(V)+factor(T))*weight+FMS*vision*prop*sensory, random=~1|subject, data=baseline, na.action="na.omit", method="ML")  
+res2b<-lme(fixed=log(plfr)~(factor(V)*factor(T)+factor(K))*weight*FMS*vision*prop*sensory, random=~1|subject, data=baseline, na.action="na.omit", method="ML")  
+res2c<-lme(fixed=log(plfr)~(factor(K)*factor(T)+factor(V))*weight*FMS*vision*prop*sensory, random=~1|subject, data=baseline, na.action="na.omit", method="ML")  
+
+summary(res2a)
+summary(res2b)
+summary(res2c)
+
+
+
+
+#full interaction
+res3<-lme(fixed=log(plfr)~(factor(K)*factor(T)*factor(V)*(FMS+vision+prop+sensory))*weight, random=~1|subject, data=baseline, na.action="na.omit", method="ML",weights=varIdent(form=~1|condition))  
+
+#options(max.print=999999)
+
+summary(res3)
+
+res<-lme(fixed=log(plfr)~FMS*weight, random=~1|subject, data=baseline, na.action="na.omit", method="ML",weights=varIdent(form=~1|condition)) 
+summary(res)
+
+ 
+var(log(data[(data$A.U=='Baseline' & data$condition=='TVK'),6]))
+var(log(data[(data$A.U=='Baseline' & data$condition=='V'),6]))
+
+
+res4<-lm(log(plfr)~factor(K)*factor(T)*factor(V)*weight+factor(subject)*factor(condition), data=baseline)
+res4b <-lm(log(plfr)~weight+factor(subject), data=baseline[baseline$condition=="TVK",])
+res4c <-lme(fixed=log(plfr)~weight, random=~1|subject,data=baseline[baseline$condition=="TVK",])
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
